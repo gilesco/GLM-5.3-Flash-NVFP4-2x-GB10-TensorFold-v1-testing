@@ -1,25 +1,49 @@
-# Copy to scripts/local.sh (not in git) and fill in this setup's values; config.sh reads it first.
-# The defaults below are this site's (brain02 = head/rank 0, brain03 = worker/rank 1).
+# Copy to scripts/local.sh (not in git), fill in your site's values; config.sh reads it first
+# and every value here overrides config.sh's defaults. Two of them are required — WORKER and
+# HEAD_FABRIC_ADDR — and every script that starts or queries the ranks refuses to run without
+# them (DRY_RUN=1 ./scripts/start.sh is the only exception: it prints commands and needs nothing).
 
-WORKER=giles@brain03
+# --- the pair ---------------------------------------------------------------
+# Rank 1's ssh destination, key-based (the scripts use BatchMode ssh). Verify before anything:
+#
+#   ssh -o BatchMode=yes <user>@<worker> true
+#
+# Using the worker's rail IP instead of its hostname keeps prepare's checkpoint rsync and the
+# image copy on the direct link rather than the LAN.
+#
+# WORKER=<user>@<worker-host-or-ip>
 
-# The ConnectX-7 rails (config.sh's defaults already match this site's addressing):
-# HEAD_FABRIC_ADDR=192.168.2.1      # brain02, enp1s0f1np1 (NCCL's bootstrap listens here)
-# WORKER_FABRIC_ADDR=192.168.2.2    # brain03, enp1s0f1np1
-# NCCL_SOCKET_IFNAME=enp1s0f1np1,enP2p1s0f1np1
+# --- the fabric -------------------------------------------------------------
+# The ranks talk over point-to-point rails (this recipe was written on a pair of ConnectX-7s,
+# one /30 subnet per cable; any fabric with host-to-host reachability works). On each host,
+# `ip -br addr` shows the rail interfaces and their addresses — the interface cabled to the
+# peer. NCCL's bootstrap listens on the head's rail address and discovers the rest from there.
+#
+# HEAD_FABRIC_ADDR   the HEAD host's rail address (required — NCCL_COMM_ID is built from it)
+# WORKER_FABRIC_ADDR the WORKER host's rail address (documentation; discovery finds the rest)
+#
+# HEAD_FABRIC_ADDR=<head-rail-ip>
+# WORKER_FABRIC_ADDR=<worker-rail-ip>
 
-# The TensorFold line to track: latest v1.* release by default; pin with a tag (or TF_COMMIT).
-# TF_REF=v1.0.12
+# --- NCCL's view of the link ------------------------------------------------
+# NCCL_SOCKET_IFNAME: comma-separated netdevs NCCL may use — the rail interface names from
+# `ip -br addr`. Leave unset on a single-interface host; on a multi-homed one, pin the rails or
+# NCCL may pick the LAN and split exchanges crawl or fail. NCCL_IB_HCA pins RDMA devices
+# (default: all of them).
+#
+# NCCL_SOCKET_IFNAME=<rail-netdev>[,<second-rail-netdev>]
+# NCCL_IB_HCA=<rdma-device>[,...]
 
-# The checkpoint revision: config.sh defaults to the one already in both Sparks' caches
-# (09b04e5e...). The PR's receipts were measured on 423acf37...:
-# MODEL_REVISION=423acf37
+# --- recipe overrides (rarely needed; config.sh's defaults are documented in README.md) ---
+# TF_REF=latest-v1                   # unpin from the v1.1.0 the #971 window is pinned to
+# MODEL_REVISION=09b04e5e            # another checkpoint revision (README's table lists them)
+# CONTEXT=40960                      # the window the PR qualified
+# PARALLEL=4                         # streams
+# SERVED_NAME=GLM-5.3-Flash-NVFP4    # the API's model name
+# API_KEY=change-me                  # recommended; clients send it as Authorization: Bearer
+# DRAFTS=0                           # --no-drafts: the serial reference, no MTP drafts
+# VISION=0                           # drop --vision (text-only behavior; image parts refused)
+# VISION_URLS=1                      # also fetch public HTTPS image URLs server-side
+# MEMORY_LIMIT_GB=21                 # -> TENSORFOLD_CUDA_MEMORY_LIMIT_GB (default: engine default)
 
-# Serving (defaults in config.sh; the window the PR qualified is 40960):
-# CONTEXT=40960
-# PARALLEL=4
-# SERVED_NAME=GLM-5.3-Flash-NVFP4
-# API_KEY=change-me                 # recommended; clients send it as Authorization: Bearer
-# DRAFTS=0                          # the serial reference, no MTP drafts
-
-# NCCL_DEBUG=INFO                   # first bring-up: NCCL's view of the ranks and the rails
+# NCCL_DEBUG=INFO                    # first bring-up: NCCL's view of the ranks and the rails

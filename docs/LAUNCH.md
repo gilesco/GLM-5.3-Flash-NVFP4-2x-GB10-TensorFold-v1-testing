@@ -40,7 +40,7 @@ looks different before acting.
 # 1. get the repo onto the head
 git clone https://github.com/gilesco/GLM-5.3-Flash-NVFP4-2x-GB10-TensorFold-v1-testing
 cd GLM-5.3-Flash-NVFP4-2x-GB10-TensorFold-v1-testing
-cp scripts/local.sh.example scripts/local.sh      # defaults already match this site
+cp scripts/local.sh.example scripts/local.sh   # fill in WORKER + rails (this site's: §1 below)
 
 # 2. resolve version, build the image (LONG the first time: Zig + nvcc for sm_121),
 #    smoke-test it, copy it to brain03, write the prepared marker
@@ -106,7 +106,73 @@ Work through [VALIDATION.md](VALIDATION.md) in order (exactness → capacity →
 clients) and record results in its table. Until then, this stack is a curiosity, not a
 server.
 
-## 6. Session log (append-only)
+## 6. The #971 media-receipt window (TensorFold v1.1.0) — runbook
+
+Upstream's 2026-10-19 comment on [ashhart/TensorFold#971](https://github.com/ashhart/TensorFold/issues/971)
+asks for the NVFP4 media receipts from this pair. What is already prepared (2026-10-19 session,
+no GPU work, production untouched):
+
+- `config.sh` pins **TF_REF=v1.1.0** (the tag peels to `76aafcf274e60a5e31a59ce145b2f71f7b366e9d`,
+  the commit upstream named — #855's images + #976's video) and **MODEL_REVISION=da920bb0…** (the
+  agreed revision). `VISION=1` adds `--vision` to **both** ranks' serve line (the ranks must agree
+  on it before loading).
+- The `da920bb0` snapshot is **already complete on both hosts** (42 files, 33 shards + index, no
+  broken links, layer 45 in both config files). Its only diff vs the cached `09b04e5e` is
+  `config.json` + `hf_quant_config.json`, so no large fetch was needed.
+- `image/build-native.sh` now also builds **libtfvideo** (upstream's own recipe:
+  `tools/zig/build_ffmpeg.sh` + `zig build video`) and the **pinned decoders** the server
+  dlopens from `../lib` beside the binary: libjpeg-turbo **3.1.4.1** and libwebp **1.6.0**
+  (Ubuntu 24.04's system copies are refused by version; PNG needs nothing external).
+- `scripts/media_gates.py` runs the owed gates (drafted/plain, changed-image isolation,
+  resumed/fresh, concurrent/solo, video) and prints a paste-ready receipt block;
+  [docs/VALIDATION.md](VALIDATION.md) §7 is the checklist.
+
+Order on the day. **Stopping production is manual (step 1) — nothing here does it.**
+
+```sh
+# 1. STOP PRODUCTION (from the production checkout on the head)
+~/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/stop.sh
+#    verify: no glm53-flash-tf container on either host; port 8000 free; MemAvailable rises
+
+# 2. stage the recipe (the clone is fresh the first time; local.sh carries this site's values:
+#    WORKER=giles@192.168.2.2 — the rail IP, not the hostname)
+cd ~/GLM-5.3-Flash-NVFP4-2x-GB10-TensorFold-v1-testing && git pull --ff-only
+cp scripts/local.sh.example scripts/local.sh && $EDITOR scripts/local.sh   # skip if it exists
+
+# 3. build + distribute (AFTER step 1: the compile needs headroom brain02 does not have while
+#    production serves — MemAvailable was ~6 GB under the production rank; the build itself is
+#    CPU-only, ~10-20 min the first time: zig + nvcc + ffmpeg + the two decoders)
+./scripts/prepare.sh
+
+# 4. sanity: both ranks' serve line shows --vision and the da920bb0 snapshot
+DRY_RUN=1 ./scripts/start.sh
+
+# 5. launch: rank 1 on the worker first, rank 0 here, waits for /health
+./scripts/start.sh
+
+# 6. startup admission + per-rank peak memory (the receipt's memory lines)
+docker logs glm53-native-tf 2>&1 | grep -iE 'admis|memory|vision|rank' | head -60
+ssh giles@192.168.2.2 docker logs glm53-native-tf 2>&1 | grep -iE 'admis|memory|vision|rank' | head -60
+curl -s http://127.0.0.1:8000/health | python3 -m json.tool
+
+# 7. the media gates (the image gates are the owed core; --video when a clip exists,
+#    docs/VALIDATION.md §7 has the recipe)
+python3 scripts/media_gates.py
+python3 scripts/media_gates.py --video /tmp/clip.mp4     # optional
+
+# 8. paste the receipt block to #971 (gate results + memory + the tf= line from
+#    ~/.local/state/glm53-native/prepared)
+
+# 9. rollback: ./scripts/stop.sh, then production's start.sh (§4 below)
+```
+
+Watch one thing in step 5's logs: the tower is bf16 and unquantized, and #855 puts it on rank 0
+— the interesting memory line is rank 0's model total vs the v1.0.12 baseline (93.72 GiB/rank,
+100.6 GB peak at `--context 40960 --parallel 4`, ~21 GiB spare). If admission refuses a rank,
+it names the rank and its reason (the `mem_busy`/port guards in `start.sh` fail in seconds when
+production is still up).
+
+## 7. Session log (append-only)
 
 - **2026-10-16** (session that built this repo): repo created and pushed at `46f05e5`;
   shellcheck clean; DRY_RUN/marker/version-resolution flows tested from the workstation;
@@ -149,3 +215,35 @@ server.
   [ashhart/TensorFold#971](https://github.com/ashhart/TensorFold/issues/971) (proposal +
   test-hardware offer, LLM-agent-posted on gilesco's behalf and approved by them, per their
   request; no implementation commitment).
+- **2026-10-19** (#971 window preparation; production served throughout, untouched): upstream's
+  2026-10-19 comment committed to the window — v1.1.0 @ `76aafcf…` with #855/#976's media on
+  the NVFP4 revision `da920bb0…`. Prepared:
+  - Verified the pin: `v1.1.0` peels to `76aafcf274e60a5e31a59ce145b2f71f7b366e9d` (git
+    ls-remote); `.zig-version` is still 0.17.0. Serve flags read from upstream's source:
+    `--vision` (both ranks must agree before loading), `--vision-urls` for HTTPS fetches,
+    `--vision-{max-images,max-videos,image-tokens,video-tokens}` for the limits. Media parts
+    are OpenAI-style `image_url`/`video_url` content parts; `data:` base64 URLs need no extra
+    flag; `"draft": false` is a per-request body field (no restart for the plain reference).
+  - `config.sh`: TF_REF=v1.1.0, MODEL_REVISION=da920bb0…, VISION=1 (+ VISION_URLS=0) wired into
+    `serve_args` and the config fingerprint. Defaults genericised (WORKER/HEAD_FABRIC_ADDR now
+    required and die with a pointer to local.sh; NCCL_SOCKET_IFNAME optional, unset lets NCCL
+    choose); the site's values moved to the gitignored `scripts/local.sh` — WORKER is
+    **giles@192.168.2.2** (the rail IP, matching the v1.1-testing recipe), and
+    `ssh -o BatchMode=yes giles@192.168.2.2` from brain02 verified live. `local.sh.example` is
+    now placeholders + how to find each value.
+  - `image/build-native.sh`: builds **libtfvideo** (upstream's `tools/zig/build_ffmpeg.sh`
+    FFmpeg 9.0.2 + `zig build video`, installing to `zig-out/native/lib`) and the **pinned
+    decoders** — libjpeg-turbo **3.1.4.1** (Ubuntu 24.04's 2.1.5 is refused by version) and
+    libwebp **1.6.0** — collected into `/out/lib` (= the binary's `../lib`). PNG needs no
+    external library; a wrong-version decoder is refused with a named warning, and
+    `TENSORFOLD_LIBTURBOJPEG`/`TENSORFOLD_LIBWEBP` can point elsewhere in a pinch. The NGC
+    26.07 builder image has **no ffmpeg CLI** (clip recipes must not rely on it).
+  - Checkpoint staging verified on both hosts: the `da920bb0` snapshot was already cached
+    (42 files, 33 shards + index, 0 broken links, layer 45 present in both config files) — its
+    only diff vs `09b04e5e` is `config.json` + `hf_quant_config.json`, so every 190.43 GiB of
+    blobs is shared. No fetch needed; the ranks still cross-check every byte at start.
+  - `scripts/media_gates.py` (stdlib-only): the five owed gates + optional `--video` gates,
+    prints a paste-ready receipt block with `/health`'s memory JSON.
+  - Window runbook added as docs/LAUNCH.md §6. **The build must wait for the window**: brain02
+    had ~6 GB MemAvailable under the production rank, and the first v1.1.0 build (zig + nvcc +
+    ffmpeg + decoders) should not run against that.

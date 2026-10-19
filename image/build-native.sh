@@ -13,6 +13,13 @@ SM_ARCH="${SM_ARCH:-121}"
 echo "== tools present =="
 command -v curl || { apt-get update && apt-get install -y --no-install-recommends curl ca-certificates xz-utils git; }
 command -v git || apt-get install -y --no-install-recommends git
+# Tools the media-decoder builds need below (shasum is perl; build_ffmpeg.sh verifies its
+# tarball with it). The NGC base has gcc/make; install only what is missing.
+_missing=""
+command -v make >/dev/null || _missing="$_missing make"
+command -v cmake >/dev/null || _missing="$_missing cmake"
+command -v shasum >/dev/null || _missing="$_missing perl"
+if [[ -n "$_missing" ]]; then apt-get update && apt-get install -y --no-install-recommends $_missing; fi
 NVCC="$(command -v nvcc || echo /usr/local/cuda/bin/nvcc)"
 [[ -x "$NVCC" ]] || { echo "no nvcc in the builder image (BASE_IMAGE must be a CUDA devel image)" >&2; exit 1; }
 "$NVCC" --version | tail -1
@@ -51,9 +58,40 @@ BIN=/src/TensorFold/zig-out/native/bin/tensorfold-native
 [[ -x "$BIN" ]] || { echo "build did not produce $BIN" >&2; exit 1; }
 "$BIN" --version
 
+echo "== libtfvideo (video input): upstream's own recipe =="
+# tools/zig/build_ffmpeg.sh builds a static FFmpeg 9.0.2 (PyAV's decoders only) and
+# `zig build video` compiles libtfvideo over it, installing to zig-out/native/lib/. Without it,
+# --vision still serves images but refuses video parts at the first request.
+bash tools/zig/build_ffmpeg.sh /opt/ffmpeg
+zig build video -Dffmpeg=/opt/ffmpeg
+ls -la zig-out/native/lib/
+
+echo "== the pinned image decoders (core/picture/jpeg.zig, webp.zig) =="
+# The server dlopens libturbojpeg.so.0 / libwebpdecoder.so.3 from ../lib beside the binary and
+# refuses them by version: libjpeg-turbo 3.1.4.1 (Pillow 12.3's) and libwebp 1.6.0 (Pillow
+# 13.0.0's). Ubuntu 24.04's system copies are older, so build the pins here.
+mkdir -p /opt/decoders/src && cd /opt/decoders/src
+curl -fsSLO https://github.com/libjpeg-turbo/libjpeg-turbo/archive/refs/tags/3.1.4.1.tar.gz
+tar xf 3.1.4.1.tar.gz
+cmake -S libjpeg-turbo-3.1.4.1 -B libjpeg -DCMAKE_BUILD_TYPE=Release -DENABLE_STATIC=0 -DENABLE_SHARED=1
+cmake --build libjpeg -j"$(getconf _NPROCESSORS_ONLN)"
+cp -L "$(find "$PWD/libjpeg" -name 'libturbojpeg.so.0*' | sort | head -1)" /opt/decoders/libturbojpeg.so.0
+curl -fsSLO https://github.com/webmproject/libwebp/archive/refs/tags/v1.6.0.tar.gz
+tar xf v1.6.0.tar.gz
+cmake -S libwebp-1.6.0 -B webp -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=1 -DWEBP_BUILD_ANIM_UTILS=0 -DWEBP_BUILD_C_WEBP=0 -DWEBP_BUILD_DWEBP=0 -DWEBP_BUILD_GIF2WEBP=0 -DWEBP_BUILD_IMG2WEBP=0 -DWEBP_BUILD_VWEBP=0 -DWEBP_BUILD_WEBPINFO=0 -DWEBP_BUILD_WEBPMUX=0 -DWEBP_BUILD_EXTRAS=0
+cmake --build webp -j"$(getconf _NPROCESSORS_ONLN)"
+cp -L "$(find "$PWD/webp" -name 'libwebpdecoder.so*' | sort | head -1)" /opt/decoders/libwebpdecoder.so.3
+cd /src/TensorFold
+
 echo "== collect /out =="
 mkdir -p /out/bin /out/lib
 cp "$BIN" /out/bin/
+# The media libraries the server dlopens from ../lib at the first JPEG/WebP/video: libtfvideo
+# from the video build, the two pinned decoders from above. libcuda is deliberately NOT copied —
+# at run time the host's driver provides it.
+if [[ -d zig-out/native/lib ]]; then cp -L zig-out/native/lib/* /out/lib/; fi
+[[ -e /opt/decoders/libturbojpeg.so.0 ]] && cp /opt/decoders/libturbojpeg.so.0 /out/lib/libturbojpeg.so.0
+[[ -e /opt/decoders/libwebpdecoder.so.3 ]] && cp /opt/decoders/libwebpdecoder.so.3 /out/lib/libwebpdecoder.so.3
 # NCCL: the hosts have no system libnccl and the engine opens it at run time; take the
 # builder's. libcuda is deliberately NOT copied — at run time the host's driver provides it.
 ldd "$BIN" > /out/ldd.txt || true

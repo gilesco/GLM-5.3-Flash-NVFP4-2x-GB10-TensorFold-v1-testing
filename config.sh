@@ -9,7 +9,8 @@
 #
 # This recipe serves GLM-5.3-Flash (NVIDIA's NVFP4 checkpoint) on the native TensorFold CUDA
 # engine ("tensorfold-native") at tensor parallel over two GB10 hosts, after PR #804 (first
-# shipped in the v1.0.x line). Everything runs in Docker; no Python engine and no patch stack.
+# shipped in the v1.0.x line) with #855/#976's image and video input on top (the v1.1.0 line).
+# Everything runs in Docker; no Python engine and no patch stack.
 _cfg_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [[ -f "$_cfg_root/scripts/local.sh" ]]; then
   declare -A _cfg_env=()
@@ -33,44 +34,54 @@ fi
 unset _n _line _key _value
 
 # ---------------------------------------------------------------------------
-# TensorFold version. Releases are frequent; "latest-v1" (the default) resolves to the newest
-# v1.* release at prepare time and records the resolved tag and commit in the prepared marker,
-# so an upstream release changes nothing until you re-run prepare. Pin instead with e.g.
-# TF_REF=v1.0.12 (a tag) or TF_COMMIT=<sha> (an exact tree; wins over TF_REF).
+# TensorFold version. Releases are frequent; "latest-v1" (the old default) resolves to the
+# newest v1.* release at prepare time and records the resolved tag and commit in the prepared
+# marker, so an upstream release changes nothing until you re-run prepare. Pin instead with
+# e.g. TF_REF=v1.1.0 (a tag) or TF_COMMIT=<sha> (an exact tree; wins over TF_REF).
+#
+# Pinned to v1.1.0 for the ashhart/TensorFold#971 media-receipt window: v1.1.0's tag peels to
+# 76aafcf274e60a5e31a59ce145b2f71f7b366e9d, the commit upstream's 2026-10-19 comment names
+# (#855's images and #976's video). prepare records the resolved commit in the prepared marker;
+# revert to latest-v1 (or bump the tag) once the window is done.
 # ---------------------------------------------------------------------------
-TF_REF="${TF_REF:-latest-v1}"
+TF_REF="${TF_REF:-v1.1.0}"
 TF_COMMIT="${TF_COMMIT:-}"
 TF_REPO="${TF_REPO:-https://github.com/ashhart/TensorFold.git}"
 
 # The GLM-5.3-Flash NVFP4 checkpoint (ModelOpt, read as stored; PR #804's family reads no other
-# format). The revision below is the one already present in both Sparks' Hugging Face caches.
+# format). Pinned to the revision upstream's #971 thread agreed for the receipts.
 # Alternatives:
+#   09b04e5e... - the revision this site served first (also in both caches); it differs from
+#                 da920bb0 only in config.json and hf_quant_config.json (layer 45 added to the
+#                 ignore list), so the da920bb0 fetch reuses every 190 GiB blob and takes seconds
 #   423acf37... - the revision PR #804's receipts were measured on (download it if you want the
 #                 exact validated tree; see docs/VALIDATION.md)
-#   da920bb0... - upstream main's revision (adds layer 45 to the ignore list; the engine reads
-#                 tensors as stored, so later revisions are expected to work)
 # The ranks cross-check every checkpoint byte against each other at start, so a copy that
 # differs on one host stops both before serving.
 MODEL_ID="${MODEL_ID:-nvidia/GLM-5.3-Flash-NVFP4}"
-MODEL_REVISION="${MODEL_REVISION:-09b04e5e74bca08ca8549fc736d4cdd8624bfde3}"
+MODEL_REVISION="${MODEL_REVISION:-da920bb0b9f4a06727223a349e55468e38352348}"
 
-# The two GB10s: this machine (the head) serves rank 0 and the API; WORKER (ssh target,
-# key-based) runs rank 1. Rank 1 is started first, rank 0 serves HTTP (the native engine's
+# The pair: this machine (the head) serves rank 0 and the API; WORKER — an ssh destination,
+# key-based — runs rank 1. Rank 1 is started first, rank 0 serves HTTP (the native engine's
 # rank-over-host pattern; docs/DELTAS.md). TP=3 is not servable on the native engine yet
-# (it waits on upstream's multi-rank bootstrap fabric), so TP is fixed at 2.
+# (it waits on upstream's multi-rank bootstrap fabric), so TP is fixed at 2. WORKER and the
+# fabric addresses below are site settings: put them in scripts/local.sh
+# (scripts/local.sh.example explains how to find each one).
 TP=2
-WORKER="${WORKER:-giles@brain03}"
+WORKER="${WORKER:-}"
 
-# The ConnectX-7 rails between the Sparks (one /30 subnet per cable). NCCL's bootstrap listens
-# on the head's rail address; NCCL discovers the rest from there. Both rails are cabled on this
-# site, so the default split exchange works and TF_GLM_PREFILL_REDUCE=gather is NOT needed
-# (that is for fabrics where some rank pairs cannot connect).
-HEAD_FABRIC_ADDR="${HEAD_FABRIC_ADDR:-192.168.2.1}"      # brain02, enp1s0f1np1
-WORKER_FABRIC_ADDR="${WORKER_FABRIC_ADDR:-192.168.2.2}"  # brain03, enp1s0f1np1
+# The point-to-point rails between the pair (this recipe was written on two ConnectX-7s, one
+# /30 subnet per cable; any fabric with host-to-host reachability works). NCCL's bootstrap
+# listens on the head's rail address and discovers the rest from there. Where every rank pair
+# can reach every other, the default split exchange works and TF_GLM_PREFILL_REDUCE=gather is
+# NOT needed (that is for fabrics where some rank pairs cannot connect).
+HEAD_FABRIC_ADDR="${HEAD_FABRIC_ADDR:-}"                  # the head's rail address (required)
+WORKER_FABRIC_ADDR="${WORKER_FABRIC_ADDR:-}"              # the worker's rail address (documentation)
 NCCL_PORT="${NCCL_PORT:-29741}"
-# Comma-separated netdevs NCCL may use over the link; both rails of this site. NCCL_IB_HCA is
-# left empty on purpose (all RoCE devices); set it in local.sh to pin devices.
-NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-enp1s0f1np1,enP2p1s0f1np1}"
+# Comma-separated netdevs NCCL may use. Empty: NCCL chooses — fine on single-interface hosts;
+# on multi-homed ones, pin the rail netdevs in local.sh or NCCL may ride the LAN. NCCL_IB_HCA
+# is empty on purpose (all RDMA devices); set it in local.sh to pin devices.
+NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-}"
 NCCL_IB_HCA="${NCCL_IB_HCA:-}"
 # Extra NCCL debug, for a first bring-up: set NCCL_DEBUG=INFO in local.sh and watch the logs.
 
@@ -78,7 +89,7 @@ NCCL_IB_HCA="${NCCL_IB_HCA:-}"
 # carries the binary, its libraries and NCCL and is what both ranks run. The builder needs a
 # CUDA devel base with nvcc for aarch64: nvcr.io/nvidia/pytorch:26.07-py3 is already pulled on
 # the head and ships both, but any arm64 CUDA 13.x devel image works (set BASE_IMAGE).
-ZIG_VERSION="${ZIG_VERSION:-0.17.0}"                     # TensorFold's .zig-version at v1.0.x
+ZIG_VERSION="${ZIG_VERSION:-0.17.0}"                     # TensorFold's .zig-version (still 0.17.0 at v1.1.0)
 SM_ARCH="${SM_ARCH:-121}"                                # GB10
 BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:26.07-py3}"
 IMAGE_NAME="${IMAGE_NAME:-glm53-native-tf}"   # the runtime image; prepare.sh tags it <name>:<resolved version>
@@ -101,6 +112,12 @@ PORT="${PORT:-8000}"             # the same port production serves on: clients k
 CONTEXT="${CONTEXT:-40960}"
 PARALLEL="${PARALLEL:-4}"
 DRAFTS="${DRAFTS:-1}"            # 0 passes --no-drafts (the serial reference; MTP is the only drafter here)
+VISION="${VISION:-1}"            # --vision on both ranks (image_url/video_url parts in user
+                                 # messages): the #971 media receipts need it, and the ranks must
+                                 # agree on it before loading. 0 reproduces the text-only v1.0.12
+                                 # behavior; a server without --vision refuses image parts.
+VISION_URLS="${VISION_URLS:-0}"  # 1 adds --vision-urls: the server fetches public HTTPS image
+                                 # URLs itself. data: URLs always work with --vision alone.
 API_KEY="${API_KEY:-}"           # recommended; also required by upstream for --slide-style features
 MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-}"   # -> TENSORFOLD_CUDA_MEMORY_LIMIT_GB, empty: engine default
 
@@ -116,6 +133,14 @@ log()  { printf '%s[%s]%s %s\n' "$(_c 1 '1;36')" "$(basename "$0")" "$(_c 1 0)" 
 warn() { printf '%s[%s] WARN:%s %s\n' "$(_c 2 '1;33')" "$(basename "$0")" "$(_c 2 0)" "$*" >&2; }
 die()  { printf '%s[%s] ERROR:%s %s\n' "$(_c 2 '1;31')" "$(basename "$0")" "$(_c 2 0)" "$*" >&2; exit 1; }
 
+# The required site settings; scripts/local.sh (copied from scripts/local.sh.example) is where
+# they belong. DRY_RUN is exempt: a dry run only prints the two docker commands and needs
+# nothing. Everything else has a workable default.
+if [[ "${DRY_RUN:-0}" != 1 ]]; then
+  [[ -n "$WORKER" ]] || die "WORKER is not set - rank 1's ssh destination (key-based); fill it in scripts/local.sh (scripts/local.sh.example shows how to find it)"
+  [[ -n "$HEAD_FABRIC_ADDR" ]] || die "HEAD_FABRIC_ADDR is not set - the head's rail address, where NCCL's bootstrap listens; fill it in scripts/local.sh (scripts/local.sh.example shows how)"
+fi
+
 worker() { ssh -o BatchMode=yes "$WORKER" "$@"; }  # args ARE the remote command (a bare ssh
                                                    # would eat our stdin as shell input)
 
@@ -127,7 +152,8 @@ RUN_ARGS=(--gpus all --ipc=host --network host --shm-size 16g --device /dev/infi
 # Environment passed into both ranks: offline serving from the mounted cache, plus every
 # TENSORFOLD_/TF_GLM_/NCCL_ variable this recipe sets.
 env_args() {
-  ENV_ARGS=(-e HF_HUB_OFFLINE=1 -e NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME")
+  ENV_ARGS=(-e HF_HUB_OFFLINE=1)
+  [[ -z "$NCCL_SOCKET_IFNAME" ]] || ENV_ARGS+=(-e NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME")
   [[ -z "$NCCL_IB_HCA" ]] || ENV_ARGS+=(-e NCCL_IB_HCA="$NCCL_IB_HCA")
   [[ -z "$MEMORY_LIMIT_GB" ]] || ENV_ARGS+=(-e TENSORFOLD_CUDA_MEMORY_LIMIT_GB="$MEMORY_LIMIT_GB")
   while IFS='=' read -r name _; do ENV_ARGS+=(-e "$name=${!name}"); done \
@@ -135,11 +161,16 @@ env_args() {
 }
 
 # The serve arguments both ranks take (rank 0 adds --name/--host/--port in start.sh). The ranks
-# must agree on window and streams: each allocates its own state before rank 0 admits.
+# must agree on window, streams and the vision flags (all of them) before either loads: each
+# allocates its own state before rank 0 admits, and the media limits are part of the handshake.
 serve_args() {
   local args=(serve "/root/.cache/huggingface/hub/models--${MODEL_ID//\//--}/snapshots/$MODEL_REVISION"
               --context "$CONTEXT" --parallel "$PARALLEL")
   [[ "$DRAFTS" == 1 ]] || args+=(--no-drafts)
+  if [[ "$VISION" == 1 ]]; then
+    args+=(--vision)
+    [[ "$VISION_URLS" == 1 ]] && args+=(--vision-urls)
+  fi
   echo "${args[@]}"
 }
 
@@ -147,7 +178,7 @@ serve_args() {
 # prepare.sh whenever the config fingerprint no longer matches (a new upstream release, another
 # revision, another worker, a different window or stream count).
 config_line() {   # the fingerprint: everything except the resolved version
-  echo "model=$MODEL_ID@$MODEL_REVISION worker=$WORKER context=$CONTEXT parallel=$PARALLEL head=$HEAD_FABRIC_ADDR"
+  echo "model=$MODEL_ID@$MODEL_REVISION worker=$WORKER context=$CONTEXT parallel=$PARALLEL vision=$VISION head=$HEAD_FABRIC_ADDR"
 }
 prepared_line() { # the fingerprint plus what prepare resolved (written to $STATE_DIR/prepared)
   echo "tf=$TF_RESOLVED_REF@$TF_RESOLVED_COMMIT image=$IMAGE_REF $(config_line)"

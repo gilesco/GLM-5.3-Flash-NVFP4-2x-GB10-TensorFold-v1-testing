@@ -52,8 +52,9 @@ NCCL. Everything is Docker; the hosts need nothing but docker, ssh and the NVIDI
 - brain02 + brain03: GB10, driver 580.178.04, kernel 7.0.0-1019-nvidia, docker + nvidia
   runtime, key-based ssh head → worker (`ssh brain03` works), ~200 GB free disk each
   (the checkpoint is ~183 GB).
-- The checkpoint already in `~/.cache/huggingface` **on both** Sparks (this site has
-  revision `09b04e5e…`; see below for the alternatives).
+- The checkpoint in `~/.cache/huggingface` **on both** Sparks: this site has `09b04e5e…` cached;
+  the default revision `da920bb0…` differs only in `config.json` + `hf_quant_config.json`, so
+  `DOWNLOAD=1 ./scripts/prepare.sh` stages it in seconds (see below for the alternatives).
 - One CX7 cable per rail between the pair (this site: two rails, `192.168.2.0/30` and
   `192.168.2.4/30`); NCCL bootstraps on the head's rail address.
 - The build runs on the head inside `nvcr.io/nvidia/pytorch:26.07-py3` (arm64, has nvcc and
@@ -67,7 +68,7 @@ NCCL. Everything is Docker; the hosts need nothing but docker, ssh and the NVIDI
 > production first), the verified environment facts and the failure playbook.
 
 ```sh
-cp scripts/local.sh.example scripts/local.sh   # adjust if the defaults below do not match
+cp scripts/local.sh.example scripts/local.sh   # fill in your site's values (WORKER at minimum)
 ./scripts/prepare.sh      # resolve version, preflight, build + distribute the image
 ./scripts/start.sh        # rank 1 on the worker first, rank 0 here, waits for /health
 ./scripts/status.sh       # containers, /health, last log lines
@@ -105,13 +106,14 @@ The ones that matter:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `WORKER` | `giles@brain03` | rank 1's ssh target (key-based) |
-| `HEAD_FABRIC_ADDR` / `WORKER_FABRIC_ADDR` | `192.168.2.1` / `.2` | the CX7 rails; NCCL bootstraps on the head's |
-| `NCCL_SOCKET_IFNAME` | `enp1s0f1np1,enP2p1s0f1np1` | netdevs NCCL may use (both rails) |
-| `TF_REF` | `latest-v1` | the TensorFold line to track; or a `v1.0.x` tag / `TF_COMMIT` |
-| `MODEL_ID` / `MODEL_REVISION` | `nvidia/GLM-5.3-Flash-NVFP4` @ `09b04e5e…` | the checkpoint; the ranks verify each other's bytes at start |
+| `WORKER` | **required** (set in `scripts/local.sh`) | rank 1's ssh target (key-based) |
+| `HEAD_FABRIC_ADDR` / `WORKER_FABRIC_ADDR` | **required** / optional | the rails' addresses; NCCL bootstraps on the head's |
+| `NCCL_SOCKET_IFNAME` | unset (NCCL chooses) | netdevs NCCL may use — pin the rails on multi-homed hosts |
+| `TF_REF` | `v1.1.0` (pinned for #971) | the TensorFold line to track; or `latest-v1` / a `v1.0.x` tag / `TF_COMMIT` |
+| `MODEL_ID` / `MODEL_REVISION` | `nvidia/GLM-5.3-Flash-NVFP4` @ `da920bb0…` | the checkpoint; the ranks verify each other's bytes at start |
 | `CONTEXT` / `PARALLEL` | `40960` / `4` | window and streams; the PR-qualified window is 40960 — larger is unmeasured (bf16 KV), admission refuses what does not fit |
 | `DRAFTS` | `1` | `0` → `--no-drafts` (the serial reference; MTP is the only drafter) |
+| `VISION` / `VISION_URLS` | `1` / `0` | `--vision` on both ranks (image_url/video_url parts; #971's receipts need it); `VISION_URLS=1` adds `--vision-urls` |
 | `SERVED_NAME` / `PORT` / `HOST` | `GLM-5.3-Flash-NVFP4` / `8000` / `0.0.0.0` | API surface; the port is production's, so the stacks are mutually exclusive |
 | `API_KEY` | empty | recommended; sent as `Authorization: Bearer` |
 | `MEMORY_LIMIT_GB` | engine default | → `TENSORFOLD_CUDA_MEMORY_LIMIT_GB` |
@@ -121,12 +123,12 @@ The ones that matter:
 
 | Revision | What it is |
 | --- | --- |
-| `09b04e5e…` *(default)* | already in both Sparks' HF caches |
+| `da920bb0…` *(default; the #971-agreed revision)* | upstream main's revision (layer 45 added to the ignore list); differs from `09b04e5e` only in `config.json` + `hf_quant_config.json`, so its fetch reuses every 190 GiB blob |
+| `09b04e5e…` | the revision this site served first, already in both Sparks' HF caches |
 | `423acf37…` | the revision PR #804's receipts were measured on |
-| `da920bb0…` | upstream main today (adds layer 45 to the ignore list) |
 
-The engine reads tensors as stored (not the ignore list), so later revisions are expected to
-work; the ranks cross-check every byte before serving, so a mixed pair stops loudly.
+The engine reads tensors as stored (not the ignore list), so any of these serve; the ranks
+cross-check every byte before serving, so a mixed pair stops loudly.
 
 ## Coexistence and rollback
 

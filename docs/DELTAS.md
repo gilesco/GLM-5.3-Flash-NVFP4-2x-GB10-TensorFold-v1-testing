@@ -28,9 +28,13 @@ The native GLM CUDA family landed upstream in PR
   52.8/68.0 tok/s aggregate; cold prompts ~1,440 tok/s at 8k (22.7 s at 32k). Our production
   stack measures ~62–63 tok/s single-stream decode and ~2,050 tok/s prefill. Expect roughly
   **half the decode and ~⅔ the prefill** until the native family matures.
-- **No vision on CUDA**: GLM image/video input exists on Metal only in this line. The NVFP4
-  checkpoint contains the tower, but the CUDA family does not load it. Anything that sends
-  images stays on the old stack for now.
+- **Vision on CUDA (new in v1.1.0)**: #855/#976 brought GLM image and video input to the two-rank
+  CUDA engine — `--vision` (both ranks; they agree on it before loading), rank 0's tower encoding
+  and sending rows to rank 1. Video additionally needs `libtfvideo` and JPEG/WebP need the pinned
+  decoders, all built into this recipe's image (`image/build-native.sh`). **Unproven on our
+  pair** — the media receipts of [docs/VALIDATION.md](docs/VALIDATION.md) §7 are exactly what the
+  [ashhart/TensorFold#971](https://github.com/ashhart/TensorFold/issues/971) window owes. Until
+  they pass, anything that sends images stays on the old stack.
 - **No DFlash2, no copy-drafts**: MTP only (the PR: ~1.9× over plain).
 - **bf16 KV**: the family's gate keeps KV bf16; the old stack's fp8 latent cache is why it
   fits a 1M-token window. Large contexts on 128 GB are untested here — the PR qualified

@@ -72,3 +72,53 @@ tf-cuda-test glm-ref && tf-cuda-test glm-shared-check        # on the GPU, TP=1 
 
 The TP=2 lane checks ran at build time on the PR author's pair; re-running them here is the
 last word on our hardware.
+
+## 7. Media receipts for [ashhart/TensorFold#971](https://github.com/ashhart/TensorFold/issues/971)
+
+What upstream's 2026-10-19 comment owes from this pair: the NVFP4 checkpoint's media checks on
+two GB10 ranks — **drafted/plain, changed-image cache isolation, resumed/fresh, concurrent/solo**,
+plus video if the window permits — at the 40,960-token/four-stream window, **recording startup
+admission and per-rank peak memory**. The Python-engine comparison is optional (that line is
+frozen); the EXL3 run and SvangenStudios' NVFP4 text-only report do not cover these.
+
+The server needs `--vision` (both ranks — `VISION=1`, the default since the pin). Media parts are
+OpenAI-style `image_url` / `video_url` content parts with `data:` base64 URLs (HTTPS URLs need
+`VISION_URLS=1`). `scripts/media_gates.py` runs the gates end to end and prints a receipt block:
+
+```sh
+python3 scripts/media_gates.py --base-url http://127.0.0.1:8000 --model GLM-5.3-Flash-NVFP4
+# --video /path/to/clip.mp4   add the video gates (any h264/hevc/vp9/mp4 clip; see below)
+```
+
+- [ ] **Startup admission + per-rank memory (before any media work).** Save both ranks' startup
+      log excerpt — the admission block where each rank reports its memory after load, and the
+      agreed `--vision` handshake — plus `/health`'s memory block (`python3 -m json.tool`), and
+      `docker stats --no-stream` for the record (meaningless for device allocations on GB10's
+      unified memory, but part of the paper trail). The bf16 tower lands unquantized on rank 0;
+      the deltas against the v1.0.12 numbers (model 93.72 GiB/rank, 0.89 GiB/stream, 100.6 GB
+      peak, ~21 GiB spare) are the interesting line in the receipt.
+- [ ] **Drafted = plain with images.** The same image request at temperature 0 twice — once with
+      drafts on (default) and once with `"draft": false` — identical content.
+- [ ] **Changed-image cache isolation.** Two conversations identical except the image: turn 1
+      (image + "what colour is the square?"), turn 2 (follow-up). Each conversation's turn 2 must
+      answer about *its own* image — a stale prefix served past the swapped image fails this.
+      `media_gates.py` uses a red and a blue square and checks the answers differ per colour.
+- [ ] **Resumed = fresh past an image.** A continued conversation's turn-2 reply (prompt cache
+      resumes past the image rows) vs the same turn-2 sent as one fresh request containing the
+      full history — identical content.
+- [ ] **Concurrent = solo with images.** Four image requests in flight together, each equal to
+      its own reply run alone (`media_gates.py` does this with threads; upstream's
+      `bench_concurrent.py --alone --serial` style).
+- [ ] **Video (if the window permits).** Any small clip whose motion is easy to describe (the
+      direction something moves, a colour that changes). The builder base has no ffmpeg; make a
+      clip in a throwaway container, or bring a file:
+      `docker run --rm -v $PWD:/w ubuntu:24.04 bash -c "apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -loglevel error -f lavfi -i testsrc=duration=2:size=256x256:rate=8 -pix_fmt yuv420p /w/clip.mp4"`.
+      Gates: a video reply that describes the clip correctly, drafted = plain on the video
+      request, concurrent videos = solo.
+- [ ] Post the receipt block to #971: gate results, both ranks' memory lines, the resolved
+      `tf=` marker line from `cat $STATE_DIR/prepared`, and the checkpoint revision.
+
+Note: the first JPEG/WebP/video request dlopens the pinned decoder from the image's
+`/opt/tensorfold/lib`; if one refuses by version or is missing, the server's log line names it
+(and `TENSORFOLD_LIBTURBOJPEG` / `TENSORFOLD_LIBWEBP` can point at another copy in a pinch) —
+PNG needs no external library.
