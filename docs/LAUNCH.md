@@ -83,7 +83,7 @@ history) — the next session starts from your notes.
 
 ```sh
 cd /path/to/this/repo && ./scripts/stop.sh          # stops both testing ranks, saves logs
-cd ~/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold && ./start.sh
+cd ~/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold-tip && ./start.sh
 # verify: docker ps shows glm53-flash-tf on both hosts, port 8000 answers on the head
 ```
 
