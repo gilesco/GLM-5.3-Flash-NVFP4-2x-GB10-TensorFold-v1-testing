@@ -269,3 +269,12 @@ production is still up).
   Cost of the lesson: one full bring-up cycle. The rebuild repeats the whole build stage (the
   collect lives in its one RUN layer) — a per-stage layer split is the follow-up if builds
   start hurting.
+- **2026-10-19 rebuild + restart: image verified, ranks loading.** The rebuild checked out
+  exactly `76aafcf274e60a5e31a59ce145b2f71f7b366e9d` (build log line — cite that or the
+  prepared marker in receipts, **not** `--version`: the binary prints the in-tree manifest's
+  default "tensorfold-native 1.0.12" because upstream injects release numbers only at
+  `zig build dist` packaging). `/opt/tensorfold/lib` carries all six libraries now (nccl,
+  cublasLt, cublas, tfvideo, turbojpeg, webpdecoder). Ranks started with the digest-cache
+  volume mounted (first pass still reads the full 190 GiB — the failed run's cache died with
+  its container); the cross-check digest line from now on should say `33/33 cached` on any
+  restart.
