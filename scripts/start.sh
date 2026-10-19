@@ -85,15 +85,17 @@ log "rank 0 here: serving $MODEL_ID@$MODEL_REVISION at $HOST:$PORT (container $C
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 "${rank0_cmd[@]}" >/dev/null
 
-log "waiting for /health (weights load in minutes; the ranks first verify each other's checkpoint bytes)"
-deadline=$(( $(date +%s) + ${HEALTH_TIMEOUT_S:-900} ))
+log "waiting for /health (weights load in minutes; the ranks first cross-check every checkpoint byte)"
+# The v1.1.0 byte cross-check is slower than v1.0.12's was (~12 min for the 190 GiB at ~270
+# MiB/s on this pair, measured 2026-10-19) and the load follows it; 1800 s covers both.
+deadline=$(( $(date +%s) + ${HEALTH_TIMEOUT_S:-1800} ))
 until curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
   if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
     echo; warn "rank 0's container exited; its log:"; docker logs --tail 30 "$CONTAINER_NAME" 2>&1 | sed 's/^/  /'
     warn "rank 1's log: ssh $WORKER docker logs --tail 30 $CONTAINER_NAME"; exit 1
   fi
   if (( $(date +%s) > deadline )); then
-    warn "timed out waiting for /health after ${HEALTH_TIMEOUT_S:-900} s"
+    warn "timed out waiting for /health after ${HEALTH_TIMEOUT_S:-1800} s (the engine keeps loading; poll /health before judging)"
     warn "rank 0: docker logs -f $CONTAINER_NAME   rank 1: ssh $WORKER docker logs -f $CONTAINER_NAME"
     exit 1
   fi
