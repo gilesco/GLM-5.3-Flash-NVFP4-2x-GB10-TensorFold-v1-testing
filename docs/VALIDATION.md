@@ -148,8 +148,17 @@ prompt cache 3.9 → 1.8 GiB; free 6.5 → 4.3 GiB. `/health`: active 101.77 GB;
 image gates 104.58 GB** (vs v1.0.12's 100.6 GB at the same window/stream count — +1.2 GB for
 the tower, +2.8 GB transient during media work).
 
-**Image gates — 6/6 pass** (scripts/media_gates.py, data-URL PNGs, temperature 0):
-drafted=plain (per-request `"draft": false`) identical; changed-image cache isolation clean on
-both a red and a blue square (turn 1 answers 'Red'/'Blue', turn 2 recalls its own conversation's
-colour, and the two images' turn-1 replies differ); resumed=fresh past an image identical;
-4 concurrent image requests all equal their solo replies. Video receipt: below.
+**Image gates — 6/6 pass** (scripts/media_gates.py, data-URL PNGs, temperature 0): drafted=plain
+(per-request `"draft": false`) identical; changed-image cache isolation clean on both a red and
+a blue square (turn 1 answers 'Red'/'Blue', turn 2 recalls its own conversation's colour, and
+the two images' turn-1 replies differ); resumed=fresh past an image identical; 4 concurrent
+image requests all equal their solo replies.
+
+**Video gates — 3/3 pass (9/9 with the image gates, after the video ran):** the clip answered
+correctly ('A static television test pattern is displayed, with a small digital display on the
+right side updating.'), the video request drafted = plain, and a repeat equalled solo. The
+post-video `/health` peak is unchanged (104.58 GB — the image gates had already set it).
+
+**Host-level memory during serving** (both hosts, all gates done): brain02 (rank 0, tower side)
+105.2 GiB of ~122, brain03 (rank 1) 102.6 GiB — the ~2.6 GiB delta is the tower and the media
+path on rank 0.

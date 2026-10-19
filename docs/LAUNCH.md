@@ -290,4 +290,10 @@ production is still up).
   blue squares (each conversation's turns recall their own image's colour); resumed = fresh
   past an image; 4 concurrent image requests all equal their solo replies. Rank 1 again notes
   `RoCE all-gather: VerbsUnavailable (); NCCL carries every gather` (libibverbs not bundled —
-  graceful by design, NCCL is the served path). Video gates ran next; see the next log line.
+  graceful by design, NCCL is the served path). **Video gates 3/3** (9/9 together, image gates
+  re-passed after the video ran): the clip answered faithfully ('A static television test
+  pattern is displayed, with a small digital display on the right side updating.'), the video
+  request drafted = plain, repeat = solo; post-video peak unchanged at 104.58 GB. Host-level
+  during serving: brain02 (rank 0) 105.2 GiB used, brain03 (rank 1) 102.6 GiB — the ~2.6 GiB
+  delta is the tower + media path. **All receipts upstream's 2026-10-19 comment owed are
+  captured; the receipt block is with gilesco for approval before posting to #971.**
