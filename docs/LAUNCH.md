@@ -247,3 +247,25 @@ production is still up).
   - Window runbook added as docs/LAUNCH.md §6. **The build must wait for the window**: brain02
     had ~6 GB MemAvailable under the production rank, and the first v1.1.0 build (zig + nvcc +
     ffmpeg + decoders) should not run against that.
+- **2026-10-19 first v1.1.0 start: FAILED at family open, fixed.** Production stopped, prepare
+  built `glm53-native-tf:v1.1.0` fine, and both ranks ran the whole 190.4 GiB byte cross-check
+  (717.9 s, 0/33 cached — the digest cache is per-container and was not yet mounted) before rank
+  0 died: `the native CUDA engine cannot load … with its own glue kernels (LibraryUnavailable)`;
+  rank 1 stopped via tp_watch as designed, after noting `RoCE all-gather: VerbsUnavailable ();
+  NCCL carries every gather` (graceful: the RoCE gather's libibverbs is absent in the minimal
+  runtime image and NCCL takes over — left as-is for the receipts, NCCL is the proven path).
+  **Root cause** (read from upstream's source at 76aafcf): with `--vision`, the GLM family open
+  builds the tower on rank 0 and its first step opens cuBLASLt
+  (`families/glm/cuda_vision.zig:86` → `cuda/cublaslt.zig` dlopens `libcublasLt.so.13`);
+  v1.0.12 never needed it, so the minimal runtime image did not bundle it. **Fixes**:
+  - `image/build-native.sh` bundles `libcublasLt.so.13` (+ `libcublas.so.13` and any still
+    unresolvable dependency of `/out/lib`, from the builder's CUDA toolkit) and warns at build
+    time if a media-critical library is absent.
+  - `config.sh`/`start.sh`: the engine's file-digest cache now persists as a volume
+    (`DIGEST_CACHE_DIR` → `/root/.cache/tensorfold` in the container), so the cross-check's
+    ~12 minutes are paid once per host, not per start.
+  - `start.sh`: health wait 900 → 1800 s (the cross-check alone is ~12 min at the measured
+    ~270 MiB/s).
+  Cost of the lesson: one full bring-up cycle. The rebuild repeats the whole build stage (the
+  collect lives in its one RUN layer) — a per-stage layer split is the follow-up if builds
+  start hurting.

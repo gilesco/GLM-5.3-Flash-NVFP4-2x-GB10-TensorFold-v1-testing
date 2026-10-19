@@ -92,6 +92,27 @@ cp "$BIN" /out/bin/
 if [[ -d zig-out/native/lib ]]; then cp -L zig-out/native/lib/* /out/lib/; fi
 [[ -e /opt/decoders/libturbojpeg.so.0 ]] && cp /opt/decoders/libturbojpeg.so.0 /out/lib/libturbojpeg.so.0
 [[ -e /opt/decoders/libwebpdecoder.so.3 ]] && cp /opt/decoders/libwebpdecoder.so.3 /out/lib/libwebpdecoder.so.3
+# cuBLASLt: the vision towers (zig/src/cuda/vit.zig, families/glm/cuda_vision.zig) open
+# libcublasLt.so.13 through dlopen while the family loads — the minimal runtime base has no CUDA
+# toolkit, so bundle it from the builder (with libcublas, which some cuBLASLt builds pull).
+for so in libcublasLt.so.13 libcublas.so.13; do
+  src="$(ldconfig -p | awk -v lib="$so" '$1 == lib {print $NF; exit}')"
+  if [[ -n "$src" && -e "$src" ]]; then
+    cp -L "$src" "/out/lib/$so"
+    echo "bundled $(readlink -f "$src") as /out/lib/$so"
+  else
+    echo "WARNING: $so not found in the builder; --vision will refuse at load (LibraryUnavailable)" >&2
+  fi
+done
+# The runtime base is minimal: anything the bundled libraries still cannot resolve comes from the
+# builder too (libstdc++ and friends live there).
+_missing="$(ldd /out/lib/* 2>/dev/null | awk '/not found/{print $1}' | sort -u || true)"
+for miss in $_missing; do
+  src="$(ldconfig -p | awk -v lib="$miss" '$1 == lib {print $NF; exit}')"
+  if [[ -n "$src" && -e "$src" ]]; then cp -L "$src" "/out/lib/$miss"; echo "bundled missing dependency $miss"; fi
+done
+_left="$(ldd /out/lib/* 2>/dev/null | awk '/not found/{print $1}' | sort -u || true)"
+[[ -z "$_left" ]] || echo "WARNING: still unresolved after bundling: $_left" >&2
 # NCCL: the hosts have no system libnccl and the engine opens it at run time; take the
 # builder's. libcuda is deliberately NOT copied — at run time the host's driver provides it.
 ldd "$BIN" > /out/ldd.txt || true

@@ -126,6 +126,11 @@ MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-}"   # -> TENSORFOLD_CUDA_MEMORY_LIMIT_GB, e
 STATE_DIR="${STATE_DIR:-$HOME/.local/state/glm53-native}"
 LOG_DIR="${LOG_DIR:-$HOME/.cache/glm53-native/logs}"
 LOG_KEEP="${LOG_KEEP:-10}"
+# The engine's file-digest cache, mounted into the container at /root/.cache/tensorfold: with it,
+# a restart reads no shard (upstream #900: 0.1 s instead of the whole checkpoint); without it,
+# every start re-reads ~190 GiB (~12 min on this pair's NVMe at ~270 MiB/s). One directory per
+# host (the cache keys on each host's device/inode/times).
+DIGEST_CACHE_DIR="${DIGEST_CACHE_DIR:-$HOME/.cache/glm53-native/tensorfold-digests}"
 
 # Colours only on a terminal.
 _c() { [[ -t "$1" ]] && printf '\033[%sm' "$2" || true; }

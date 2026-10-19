@@ -66,7 +66,9 @@ rank_env() { # $1 rank id, $2 name of the array to append to; the ranks rendezvo
   local -n _out=$2
   _out+=(-e "TF_GLM_RANK=$1" -e "TF_GLM_WORLD=$TP" -e "NCCL_COMM_ID=$HEAD_FABRIC_ADDR:$NCCL_PORT")
 }
-mount_args=(-v "$HF_CACHE:/root/.cache/huggingface")
+mount_args=(-v "$HF_CACHE:/root/.cache/huggingface" -v "$DIGEST_CACHE_DIR:/root/.cache/tensorfold")
+mkdir -p "$DIGEST_CACHE_DIR"
+worker "mkdir -p '$DIGEST_CACHE_DIR'" || true
 RANK1_ENV=(); RANK0_ENV=(); rank_env 1 RANK1_ENV; rank_env 0 RANK0_ENV
 
 rank1_cmd="docker rm -f $CONTAINER_NAME 2>/dev/null; docker run -d --name $CONTAINER_NAME ${RUN_ARGS[*]} ${ENV_ARGS[*]} ${RANK1_ENV[*]} ${mount_args[*]} $IMAGE_REF ${ARGS[*]}"
