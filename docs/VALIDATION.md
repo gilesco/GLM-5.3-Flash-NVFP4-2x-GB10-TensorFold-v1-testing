@@ -122,3 +122,34 @@ Note: the first JPEG/WebP/video request dlopens the pinned decoder from the imag
 `/opt/tensorfold/lib`; if one refuses by version or is missing, the server's log line names it
 (and `TENSORFOLD_LIBTURBOJPEG` / `TENSORFOLD_LIBWEBP` can point at another copy in a pinch) —
 PNG needs no external library.
+
+### Receipts captured (2026-10-19 window, first v1.1.0 bring-up)
+
+Marker: `tf=v1.1.0@76aafcf274e60a5e31a59ce145b2f71f7b366e9d image=glm53-native-tf:v1.1.0
+model=nvidia/GLM-5.3-Flash-NVFP4@da920bb0b9f4a06727223a349e55468e38352348 worker=giles@192.168.2.2
+context=40960 parallel=4 vision=1 head=192.168.2.1`. (Cite the marker, never `--version`: the
+binary prints the in-tree manifest default "1.0.12"; upstream injects release numbers only at
+`zig build dist` packaging.)
+
+**Bring-up.** Both containers started 16:35:40Z; `/health` up 16:52:15Z — **16 min 35 s** total:
+the byte cross-check read 190.4 GiB in **717.7 s (rank 0) / 718.0 s (rank 1)**, `0/33 cached`
+(first pass — the digest-cache volume was empty; restarts read no shard); then ~4.6 min of
+weights + tower + admission. An earlier first attempt died at family open with
+`LibraryUnavailable` (the tower's cuBLASLt dlopen — fixed by bundling `libcublasLt.so.13`;
+see docs/LAUNCH.md §7). Rank 1 notes `RoCE all-gather: VerbsUnavailable (); NCCL carries every
+gather` — the minimal image ships no libibverbs; NCCL's path is the one served (as in v1.0.12).
+
+**Startup admission + per-rank memory (rank 0's line):**
+`model 94.78 GiB; 4 streams at once, 0.83 GiB each at a 40960-token window, of 4.3 GiB left
+after a 12.2 GiB reserve; prompts in passes of up to 2048 rows, a 1.8 GiB prompt cache`.
+Against the v1.0.12 baseline (2026-10-16): model **93.72 → 94.78 GiB** (+1.06 GiB — the bf16
+vision tower, unquantized, on rank 0); streams 0.89 → 0.83 GiB (upstream's index rings, #984);
+prompt cache 3.9 → 1.8 GiB; free 6.5 → 4.3 GiB. `/health`: active 101.77 GB; **peak after the
+image gates 104.58 GB** (vs v1.0.12's 100.6 GB at the same window/stream count — +1.2 GB for
+the tower, +2.8 GB transient during media work).
+
+**Image gates — 6/6 pass** (scripts/media_gates.py, data-URL PNGs, temperature 0):
+drafted=plain (per-request `"draft": false`) identical; changed-image cache isolation clean on
+both a red and a blue square (turn 1 answers 'Red'/'Blue', turn 2 recalls its own conversation's
+colour, and the two images' turn-1 replies differ); resumed=fresh past an image identical;
+4 concurrent image requests all equal their solo replies. Video receipt: below.

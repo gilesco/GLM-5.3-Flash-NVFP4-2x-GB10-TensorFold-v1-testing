@@ -278,3 +278,16 @@ production is still up).
   volume mounted (first pass still reads the full 190 GiB — the failed run's cache died with
   its container); the cross-check digest line from now on should say `33/33 cached` on any
   restart.
+- **2026-10-19 v1.1.0 window: UP, image gates pass.** Both containers started 16:35:40Z;
+  `/health` up 16:52:15Z — **16 min 35 s** (byte cross-check 717.7 s on rank 0 / 718.0 s on
+  rank 1, then ~4.6 min load). **Startup admission (rank 0):** model **94.78 GiB**, 4 streams
+  × 0.83 GiB at the 40960-token window, 4.3 GiB free after the 12.2 GiB reserve, 1.8 GiB
+  prompt cache — vs v1.0.12: **+1.06 GiB** model (the bf16 vision tower lands on rank 0,
+  unquantized), 0.89 → 0.83 GiB/stream, prompt cache 3.9 → 1.8 GiB. `/health` after the image
+  gates: active 101.77 GB, **peak 104.58 GB** (v1.0.12's peak at this window was 100.6 GB).
+  **Image gates 6/6** (`scripts/media_gates.py`, data-URL PNGs, temperature 0): drafted = plain
+  with images (per-request `"draft": false`); changed-image cache isolation clean on red and
+  blue squares (each conversation's turns recall their own image's colour); resumed = fresh
+  past an image; 4 concurrent image requests all equal their solo replies. Rank 1 again notes
+  `RoCE all-gather: VerbsUnavailable (); NCCL carries every gather` (libibverbs not bundled —
+  graceful by design, NCCL is the served path). Video gates ran next; see the next log line.
