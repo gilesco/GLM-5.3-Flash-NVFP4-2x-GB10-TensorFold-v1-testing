@@ -1,4 +1,4 @@
-# Validation gate (run when brain02/brain03 are free)
+# Validation gate (run when both hosts are free)
 
 Nothing here is trusted until these pass on our own pair. The commands assume the server from
 `scripts/start.sh` is up and a TensorFold checkout of the same version is available for its
@@ -126,8 +126,8 @@ PNG needs no external library.
 ### Receipts captured (2026-10-19 window, first v1.1.0 bring-up)
 
 Marker: `tf=v1.1.0@76aafcf274e60a5e31a59ce145b2f71f7b366e9d image=glm53-native-tf:v1.1.0
-model=nvidia/GLM-5.3-Flash-NVFP4@da920bb0b9f4a06727223a349e55468e38352348 worker=giles@192.168.2.2
-context=40960 parallel=4 vision=1 head=192.168.2.1`. (Cite the marker, never `--version`: the
+model=nvidia/GLM-5.3-Flash-NVFP4@da920bb0b9f4a06727223a349e55468e38352348 worker=<the worker's rail target>
+context=40960 parallel=4 vision=1 head=<the head's rail address>`. (Cite the marker, never `--version`: the
 binary prints the in-tree manifest default "1.0.12"; upstream injects release numbers only at
 `zig build dist` packaging.)
 
@@ -159,6 +159,6 @@ correctly ('A static television test pattern is displayed, with a small digital 
 right side updating.'), the video request drafted = plain, and a repeat equalled solo. The
 post-video `/health` peak is unchanged (104.58 GB — the image gates had already set it).
 
-**Host-level memory during serving** (both hosts, all gates done): brain02 (rank 0, tower side)
-105.2 GiB of ~122, brain03 (rank 1) 102.6 GiB — the ~2.6 GiB delta is the tower and the media
+**Host-level memory during serving** (both hosts, all gates done): the head (rank 0, tower side)
+105.2 GiB of ~122, the worker (rank 1) 102.6 GiB — the ~2.6 GiB delta is the tower and the media
 path on rank 0.

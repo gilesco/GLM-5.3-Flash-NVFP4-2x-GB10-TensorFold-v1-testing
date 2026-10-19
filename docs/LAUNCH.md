@@ -6,10 +6,11 @@ looks different before acting.
 
 ## 0. The situation
 
-- **brain02 and brain03 are two GB10 machines (128 GB unified memory each, aarch64) currently
-  running the PRODUCTION stack**: the EXL3/Python TensorFold recipe in containers named
+- **The site runs the PRODUCTION stack on two GB10 machines (128 GB unified memory each,
+  aarch64)**: the EXL3/Python TensorFold recipe in containers named
   `glm53-flash-tf` on both hosts. It serves GLM-5.3-Flash EXL3 @ `078455ff` with DFlash2 on
-  **port 8000** — rank 0 on brain02, rank 1 on brain03, rendezvous `192.168.2.1:29551`.
+  **port 8000** — rank 0 on the head, rank 1 on the worker, rendezvous on the head's rail
+  address.
 - **This repo is the testing line** (native engine, NVFP4, no patches — see `../README.md`
   and `docs/DELTAS.md`). Its launch **requires both GPUs free**, so **production must be
   stopped first**. Stopping the agent session does NOT stop the containers; someone must stop
@@ -21,20 +22,14 @@ looks different before acting.
 
 | Fact | Value |
 | --- | --- |
-| Hosts | brain02 (head/rank 0), brain03 (worker/rank 1) |
-| Arch / OS | aarch64, Ubuntu 24.04.5, kernel 7.0.0-1019-nvidia, driver **580.178.04** (same as PR #804's receipt) |
-| ssh | key-based from brain02 → brain03 works as `brain03`, `giles@172.21.2.57` and `giles@192.168.2.2`; from the workstation `ssh brain02` / `ssh brain03` work |
-| CX7 rails | `192.168.2.0/30` (brain02 `.1` ↔ brain03 `.2`, `enp1s0f1np1`) and `192.168.2.4/30` (`.5` ↔ `.6`, `enP2p1s0f1np1`) — both cabled |
-| LAN | brain02 `172.21.2.56`, brain03 `172.21.2.57` |
-| Disk | 3.7 TB NVMe each; ~1.0 TB free (brain02), ~1.2 TB (brain03) |
-| Docker images of note | `nvcr.io/nvidia/pytorch:26.07-py3` (aarch64, nvcc CUDA 13.3, libnccl) — **brain02 only**; the production `tensorfold-glm53:ed78d6fc…` — both hosts; technigmaai vLLM images (previous experiments) |
+| Arch / OS | aarch64 (arm64 images and builds throughout) |
 | Toolchain on hosts | none (no zig, no nvcc, no system libnccl) — hence the containerized build; NCCL is bundled into the runtime image |
 | Checkpoint | `nvidia/GLM-5.3-Flash-NVFP4` @ `09b04e5e74bca08ca8549fc736d4cdd8624bfde3` in both hosts' `~/.cache/huggingface` — 33 shards + index, `quant_method: modelopt`, `quant_algo: NVFP4` in config.json (admit-compatible) |
 | Version resolution | latest v1.* release resolved to **v1.0.12 @ `833bbfcba9109bb38c7af7303f80da0ca12b213c`** on 2026-10-16; `TF_REF` can pin |
 | zig 0.17.0 aarch64 tarball | reachable at ziglang.org (verified) |
-| Workstation | x86_64, **no docker** — everything happens on the Sparks; `gh` in `~/.local/bin` |
+| Site identity | hosts, addresses, ssh targets, driver, disk and image inventory live in `docs/SITE.md` — git-ignored on purpose (this site's copy is deployed with the v1.1-testing recipe); recreate it from your own records |
 
-## 2. Launch (from brain02)
+## 2. Launch (on the head)
 
 ```sh
 # 1. get the repo onto the head
@@ -43,7 +38,7 @@ cd GLM-5.3-Flash-NVFP4-2x-GB10-TensorFold-v1-testing
 cp scripts/local.sh.example scripts/local.sh   # fill in WORKER + rails (this site's: §1 below)
 
 # 2. resolve version, build the image (LONG the first time: Zig + nvcc for sm_121),
-#    smoke-test it, copy it to brain03, write the prepared marker
+#    smoke-test it, copy it to the worker, write the prepared marker
 ./scripts/prepare.sh
 
 # 3. inspect what will run (needs nothing, changes nothing)
@@ -54,7 +49,7 @@ DRY_RUN=1 ./scripts/start.sh
 # verify: no glm53-flash-tf container on either host, and
 #   nvidia-smi --query-gpu=memory.used --format=csv   shows both GPUs nearly idle
 
-# 5. launch: rank 1 on brain03 first, rank 0 here, then wait for /health
+# 5. launch: rank 1 on the worker first, rank 0 here, then wait for /health
 ./scripts/start.sh
 
 # 6. verify
@@ -65,7 +60,7 @@ curl -s http://127.0.0.1:8000/health ; curl -s http://127.0.0.1:8000/v1/models
 `start.sh` refuses to run while unified memory is mostly held (MemAvailable < 30 GB) or the
 port is taken, so a launch over a live production stack fails in seconds with a named reason.
 
-Clients point at **port 8000** (`http://brain02:8000/v1`, model `GLM-5.3-Flash-NVFP4`) — the
+Clients point at **port 8000** (`http://<head>:8000/v1`, model `GLM-5.3-Flash-NVFP4`) — the
 same port production serves, deliberately, so clients keep one endpoint when switching
 engines. The consequence: **the two stacks are mutually exclusive** — stop one before
 starting the other (`start.sh`'s port guard enforces it).
@@ -75,9 +70,9 @@ starting the other (`start.sh`'s port guard enforces it).
 | Symptom | First response |
 | --- | --- |
 | `prepare.sh` build fails | Read the docker build log — `image/build-native.sh` echoes every step. Check free disk, and that `BASE_IMAGE` (default NGC 26.07) is present. A changed upstream build.zig may have renamed `-Dsm`/`-Dnvcc` — the script falls back automatically; if both forms fail, read `packaging/README.md` at the pinned tag. |
-| `could not start rank 1` | `ssh brain03 true` from brain02 (key-based ssh), and `docker info` there. |
-| A rank exits during start | `docker logs glm53-native-tf` (rank 0) and `ssh brain03 docker logs glm53-native-tf` (rank 1). The ranks verify each other's build/cut/checkpoint bytes before loading and name any mismatch. |
-| NCCL timeout / rank waits forever | `ping 192.168.2.2` from brain02; add `NCCL_DEBUG=INFO` to `scripts/local.sh` and restart; check both rails are up (`ip -br addr` shows `enp1s0f1np1` and `enP2p1s0f1np1` UP on both). |
+| `could not start rank 1` | `ssh "$WORKER" true` from the head (key-based ssh), and `docker info` there. |
+| A rank exits during start | `docker logs glm53-native-tf` (rank 0) and `ssh "$WORKER" docker logs glm53-native-tf` (rank 1). The ranks verify each other's build/cut/checkpoint bytes before loading and name any mismatch. |
+| NCCL timeout / rank waits forever | `ping <the worker's rail address>` from the head; add `NCCL_DEBUG=INFO` to `scripts/local.sh` and restart; check both rails are up (`ip -br addr` shows `<rail netdev 1>` and `<rail netdev 2>` UP on both). |
 | `/health` never comes up | Both logs (see above); the engine's admission names a rank and its reason when memory is short. `HEALTH_TIMEOUT_S` (default 900) can be raised for the first cold load. |
 | libnccl/libstdc++ errors from the binary | The runtime image bundles libnccl only; if `--version` worked in prepare but serve complains, note the missing soname from `ldd` output and add it to `image/build-native.sh`'s collect step. |
 
@@ -89,7 +84,7 @@ history) — the next session starts from your notes.
 ```sh
 cd /path/to/this/repo && ./scripts/stop.sh          # stops both testing ranks, saves logs
 cd ~/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold && ./start.sh
-# verify: docker ps shows glm53-flash-tf on both hosts, port 8000 answers on brain02
+# verify: docker ps shows glm53-flash-tf on both hosts, port 8000 answers on the head
 ```
 
 The testing stack shares nothing with production except the port (both 8000, by design —
@@ -135,11 +130,11 @@ Order on the day. **Stopping production is manual (step 1) — nothing here does
 #    verify: no glm53-flash-tf container on either host; port 8000 free; MemAvailable rises
 
 # 2. stage the recipe (the clone is fresh the first time; local.sh carries this site's values:
-#    WORKER=giles@192.168.2.2 — the rail IP, not the hostname)
+#    WORKER=<the worker's rail target> — the rail IP, not the hostname)
 cd ~/GLM-5.3-Flash-NVFP4-2x-GB10-TensorFold-v1-testing && git pull --ff-only
 cp scripts/local.sh.example scripts/local.sh && $EDITOR scripts/local.sh   # skip if it exists
 
-# 3. build + distribute (AFTER step 1: the compile needs headroom brain02 does not have while
+# 3. build + distribute (AFTER step 1: the compile needs headroom the head does not have while
 #    production serves — MemAvailable was ~6 GB under the production rank; the build itself is
 #    CPU-only, ~10-20 min the first time: zig + nvcc + ffmpeg + the two decoders)
 ./scripts/prepare.sh
@@ -152,7 +147,7 @@ DRY_RUN=1 ./scripts/start.sh
 
 # 6. startup admission + per-rank peak memory (the receipt's memory lines)
 docker logs glm53-native-tf 2>&1 | grep -iE 'admis|memory|vision|rank' | head -60
-ssh giles@192.168.2.2 docker logs glm53-native-tf 2>&1 | grep -iE 'admis|memory|vision|rank' | head -60
+ssh <the worker's rail target> docker logs glm53-native-tf 2>&1 | grep -iE 'admis|memory|vision|rank' | head -60
 curl -s http://127.0.0.1:8000/health | python3 -m json.tool
 
 # 7. the media gates (the image gates are the owed core; --video when a clip exists,
@@ -180,12 +175,12 @@ production is still up).
   (nvcc 13.3 + NCCL, aarch64); no GPU work attempted (production was serving).
 - **2026-10-16 first launch: SUCCESS.** Production stopped cleanly; prepare built
   `glm53-native-tf:v1.0.12` (first build only ~3 min on the Grace CPU) and distributed it to
-  brain03; both ranks verified each other's checkpoint bytes and **loaded in 229.3 s**;
+  the worker; both ranks verified each other's checkpoint bytes and **loaded in 229.3 s**;
   `/health` ok (`backend cuda`, `NVIDIA GB10`, model `GLM-5.3-Flash-NVFP4`), peak memory
   100.6 GB (rank 0, `--context 40960 --parallel 4`) — ~21 GiB spare. Inference works
   end to end; measured ~22 tok/s drafted on 512-token completions (thinking on). Notes:
   - fixed live: `worker()` passed no remote command — a bare ssh ate stdin (the docker-save
-    tar reached brain03's bash; commit `c8066c0`) — re-run prepare after the fix; the docker
+    tar reached the worker's bash; commit `c8066c0`) — re-run prepare after the fix; the docker
     cache made it instant.
   - GB10's nvidia-smi reports memory as `[N/A]`; busy-checks use MemAvailable (`6e0a22b`).
   - container `docker stats` MEM is meaningless for device allocations on unified memory —
@@ -228,8 +223,8 @@ production is still up).
     `serve_args` and the config fingerprint. Defaults genericised (WORKER/HEAD_FABRIC_ADDR now
     required and die with a pointer to local.sh; NCCL_SOCKET_IFNAME optional, unset lets NCCL
     choose); the site's values moved to the gitignored `scripts/local.sh` — WORKER is
-    **giles@192.168.2.2** (the rail IP, matching the v1.1-testing recipe), and
-    `ssh -o BatchMode=yes giles@192.168.2.2` from brain02 verified live. `local.sh.example` is
+    **<the worker's rail target>** (the rail IP, matching the v1.1-testing recipe), and
+    `ssh -o BatchMode=yes <the worker's rail target>` from the head verified live. `local.sh.example` is
     now placeholders + how to find each value.
   - `image/build-native.sh`: builds **libtfvideo** (upstream's `tools/zig/build_ffmpeg.sh`
     FFmpeg 9.0.2 + `zig build video`, installing to `zig-out/native/lib`) and the **pinned
@@ -244,7 +239,7 @@ production is still up).
     blobs is shared. No fetch needed; the ranks still cross-check every byte at start.
   - `scripts/media_gates.py` (stdlib-only): the five owed gates + optional `--video` gates,
     prints a paste-ready receipt block with `/health`'s memory JSON.
-  - Window runbook added as docs/LAUNCH.md §6. **The build must wait for the window**: brain02
+  - Window runbook added as docs/LAUNCH.md §6. **The build must wait for the window**: the head
     had ~6 GB MemAvailable under the production rank, and the first v1.1.0 build (zig + nvcc +
     ffmpeg + decoders) should not run against that.
 - **2026-10-19 first v1.1.0 start: FAILED at family open, fixed.** Production stopped, prepare
@@ -294,7 +289,7 @@ production is still up).
   re-passed after the video ran): the clip answered faithfully ('A static television test
   pattern is displayed, with a small digital display on the right side updating.'), the video
   request drafted = plain, repeat = solo; post-video peak unchanged at 104.58 GB. Host-level
-  during serving: brain02 (rank 0) 105.2 GiB used, brain03 (rank 1) 102.6 GiB — the ~2.6 GiB
+  during serving: the head (rank 0) 105.2 GiB used, the worker (rank 1) 102.6 GiB — the ~2.6 GiB
   delta is the tower + media path. **All receipts upstream's 2026-10-19 comment owed are
   captured; the receipt block is with gilesco for approval before posting to #971.**
 - **2026-10-19 receipts posted upstream.** The complete block (configuration marker, bring-up

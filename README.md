@@ -11,13 +11,12 @@
 > [MiaAI-Lab's EXL3 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold)
 > until [docs/VALIDATION.md](docs/VALIDATION.md) passes here.
 
-Two DGX-Spark-class GB10 machines (here: `brain02` = head/rank 0, `brain03` = worker/rank 1)
-serve one GLM-5.3-Flash instance, tensor-parallel over the ConnectX-7 link: rank 0 runs the
+Two DGX-Spark-class GB10 machines — one **head** (rank 0), one **worker** (rank 1) — serve one GLM-5.3-Flash instance, tensor-parallel over the ConnectX-7 link: rank 0 runs the
 engine and the API, rank 1 holds its share of every axis and follows rank 0's steps over
 NCCL. Everything is Docker; the hosts need nothing but docker, ssh and the NVIDIA driver.
 
 ```text
-   brain02 (head)                                brain03 (worker)
+   head host                                     worker host
    ┌─────────────────────────┐                   ┌─────────────────────────┐
    │ glm53-native-tf:<v1.x>  │                   │ glm53-native-tf:<v1.x>  │
    │ rank 0: serves :8000    │ ← CX7 2× rails →  │ rank 1: follows         │
@@ -49,14 +48,16 @@ NCCL. Everything is Docker; the hosts need nothing but docker, ssh and the NVIDI
 
 ## Requirements (this site)
 
-- brain02 + brain03: GB10, driver 580.178.04, kernel 7.0.0-1019-nvidia, docker + nvidia
-  runtime, key-based ssh head → worker (`ssh brain03` works), ~200 GB free disk each
-  (the checkpoint is ~183 GB).
-- The checkpoint in `~/.cache/huggingface` **on both** Sparks: this site has `09b04e5e…` cached;
-  the default revision `da920bb0…` differs only in `config.json` + `hf_quant_config.json`, so
-  `DOWNLOAD=1 ./scripts/prepare.sh` stages it in seconds (see below for the alternatives).
-- One CX7 cable per rail between the pair (this site: two rails, `192.168.2.0/30` and
-  `192.168.2.4/30`); NCCL bootstraps on the head's rail address.
+- Two GB10 hosts (head + worker): docker + nvidia runtime, key-based ssh head → worker,
+  ~200 GB free disk each (the checkpoint is ~183 GB). Site identity (hosts, addresses,
+  ssh targets, driver) lives in `docs/SITE.md` — git-ignored on purpose; a prepared site's
+  copy is deployed with the v1.1-testing recipe.
+- The checkpoint in `~/.cache/huggingface` **on both** hosts: the site this recipe was
+  written for has `09b04e5e…` cached; the default revision `da920bb0…` differs only in
+  `config.json` + `hf_quant_config.json`, so `DOWNLOAD=1 ./scripts/prepare.sh` stages it
+  in seconds (see below for the alternatives).
+- One CX7 cable per rail between the pair (one or two rails); record the rail addresses and
+  netdevs in `scripts/local.sh`. NCCL bootstraps on the head's rail address.
 - The build runs on the head inside `nvcr.io/nvidia/pytorch:26.07-py3` (arm64, has nvcc and
   NCCL — already pulled); the resulting runtime image is ~a few hundred MB and is copied to
   the worker with `docker save | ssh docker load`.
