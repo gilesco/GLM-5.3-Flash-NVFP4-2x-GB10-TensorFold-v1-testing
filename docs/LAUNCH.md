@@ -297,3 +297,10 @@ production is still up).
   during serving: brain02 (rank 0) 105.2 GiB used, brain03 (rank 1) 102.6 GiB — the ~2.6 GiB
   delta is the tower + media path. **All receipts upstream's 2026-10-19 comment owed are
   captured; the receipt block is with gilesco for approval before posting to #971.**
+- **2026-10-19 receipts posted upstream.** The complete block (configuration marker, bring-up
+  16 min 35 s, startup admission 94.78 GiB, /health peaks, all 9 gates, the RoCE/NCCL note and
+  our libcublasLt candour) posted to
+  [ashhart/TensorFold#971](https://github.com/ashhart/TensorFold/issues/971#issuecomment-6272660610)
+  by the agent session on gilesco's behalf with the etiquette line and their approval. Follow-up
+  offered: bundle libibverbs and rerun if upstream wants the RoCE gather path covered. Pair still
+  serving on the window; rollback to production remains ./scripts/stop.sh → production start.sh.
